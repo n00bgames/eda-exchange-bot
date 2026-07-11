@@ -452,7 +452,15 @@ COMMIT;`;
     const rows = baseRowsForCurrentMultiplier();
     const threshold = currentThreshold();
     const maxPrice = new Map();
-    for (const row of rows) maxPrice.set(row.template_id, Math.max(maxPrice.get(row.template_id) || 0, Number(row.price)));
+    for (const row of rows) {
+      // Normalize to a grade-0 price: some bundled plan rows carry a non-zero
+      // quality_level with an already grade-adjusted price, and the SQL applies
+      // the grade multiplier itself. Without this the multiplier stacks twice.
+      const grade = clampInteger(row.quality_level, 0, 0, 5);
+      const mult = GRADE_MULTIPLIERS[grade] || 1.0;
+      const grade0Price = Math.round(Number(row.price) / mult);
+      maxPrice.set(row.template_id, Math.max(maxPrice.get(row.template_id) || 0, grade0Price));
+    }
     return Array.from(maxPrice.entries()).sort((a, b) => a[0].localeCompare(b[0])).map(([templateId, price]) => `(${sqlLiteral(templateId)},${Math.max(1, Math.floor((price * threshold + 99) / 100))})`).join(",\n");
   }
 
@@ -607,13 +615,18 @@ COMMIT;`;
   }
 
   async function executeWrite(label, sql, options = {}) {
+    if (writeInProgress) {
+      statusEl.className = "status error";
+      statusEl.textContent = "Another write is already in progress.";
+      return false;
+    }
     const confirmPrompt = options.confirmPrompt !== false;
     if (!exchangesLoaded && ["Seed NPC sell market"].includes(label)) {
       statusEl.className = "status error";
       statusEl.textContent = "Exchange list is not loaded yet. Refresh exchanges before seeding.";
-      return;
+      return false;
     }
-    if (confirmPrompt && !confirm(`${label}? RedBlink will create a database backup before this write. This may take some time.`)) return;
+    if (confirmPrompt && !confirm(`${label}? RedBlink will create a database backup before this write. This may take some time.`)) return false;
     statusEl.className = "status";
     statusEl.textContent = `${label} starting. RedBlink is creating a backup before the database write...`;
     resultEl.textContent = "Running...";
@@ -628,10 +641,12 @@ COMMIT;`;
       if (label === "Seed NPC sell market" || label === "Clear EDA NPC listings" || label === "Drop unsafe NPC listings") {
         await loadExchanges();
       }
+      return true;
     } catch (error) {
       statusEl.className = "status error";
       statusEl.textContent = error.message || String(error);
       resultEl.textContent = error.stack || error.message || String(error);
+      return false;
     } finally {
       writeInProgress = false;
       for (const button of document.querySelectorAll("button")) button.disabled = false;
@@ -645,7 +660,7 @@ COMMIT;`;
       statusEl.className = "status error";
       statusEl.textContent = error.message || String(error);
       resultEl.textContent = error.stack || error.message || String(error);
-      return Promise.resolve();
+      return Promise.resolve(false);
     }
   }
 
@@ -672,11 +687,18 @@ COMMIT;`;
         return;
       }
       setAutoStatus(`Auto buyback: ${eligible.toLocaleString()} eligible player listings found; running sweep...`);
-      await runWrite("Auto buyback sweep", buildBuybackSql, { confirmPrompt: false });
-      setAutoStatus(`Auto buyback: sweep finished at ${new Date().toLocaleTimeString()}. ${describeNextRun()}.`, "status ok");
+      const ok = await runWrite("Auto buyback sweep", buildBuybackSql, { confirmPrompt: false });
+      if (ok) {
+        setAutoStatus(`Auto buyback: sweep finished at ${new Date().toLocaleTimeString()}. ${describeNextRun()}.`, "status ok");
+      } else {
+        setAutoStatus(`Auto buyback: sweep failed; check the status above. ${describeNextRun()}.`, "status error");
+      }
     } catch (error) {
       setAutoStatus(`Auto buyback failed: ${error.message || String(error)}. ${describeNextRun()}.`, "status error");
     } finally {
+      // Re-arm from completion time, not sweep start, so a write that outlasts
+      // the interval cannot trigger back-to-back runs.
+      nextAutoRunAt = Date.now() + currentAutoIntervalMinutes() * 60000;
       autoRunning = false;
     }
   }
