@@ -1,35 +1,74 @@
 # EDA Exchange Bot
 
-`EDA Exchange Bot` is a native RedBlink Dune Docker Console addon slice built
-from Easy Dune Admin's exchange seeder. It previews EDA's planned market
-listings and can run market seed/buyback sweeps through RedBlink's permissioned
-addon bridge without replacing the standalone Easy Dune Admin panel.
+`EDA Exchange Bot` is a community addon for RedBlink Dune Docker Console built
+from Easy Dune Admin's exchange seeder ([Icehunter/dune-admin
+`internal/marketbot`](https://github.com/Icehunter/dune-admin/tree/main/internal/marketbot)).
+It previews EDA's planned market listings and runs market seed and buyback
+sweeps through RedBlink's permissioned addon bridge, without replacing the
+standalone Easy Dune Admin panel.
 
-## Files
+Built from the
+[dune-docker-addon-template](https://github.com/Red-Blink/dune-docker-addon-template).
+
+See the [CHANGELOG](CHANGELOG.md) for what changed in each release, including
+the fixes ported from Easy Dune Admin's market bot and the reasoning behind
+them.
+
+## Features
+
+- **Market seeding**: seeds NPC sell listings for equipment, schematics,
+  materials, ammunition, consumables, utility items, and cartography from a
+  bundled Easy Dune Admin seed plan, with a configurable price multiplier.
+- **Schematics at grades 1-5**: every schematic is listed at quality grades
+  1 through 5 (2 listings per grade by default, configurable), priced with
+  EDA's grade multipliers (`1.0, 1.0, 1.25, 1.5, 1.75, 2.0`).
+- **More materials**: each material gets 4 listings by default (configurable)
+  instead of a single stack.
+- **Buyback sweeps**: buys eligible player sell listings at or below a
+  configurable percentage of the seeded price, grade-aware using the same
+  grade multipliers. Seller payment entries use EDA's fixes: per-unit
+  `item_price` and the never-expires sentinel expiration (`999999999`) so the
+  game server's expire proc cannot purge an uncollected "Take Solari" payment.
+- **Auto buyback**: optional scheduler that runs the buyback sweep on an
+  interval (default 30 minutes, minimum 10) while the addon page is open.
+  Every run starts with a read-only eligibility query; the write sweep (and
+  RedBlink's automatic pre-write backup) only happens when there is at least
+  one eligible listing, so idle ticks are cheap on self-hosted servers.
+- **Exchange detection**: resolves access points from
+  `dune_exchange_accesspoints` first (the exchange players actually reach
+  in-game) and refuses to fabricate one, matching EDA's exchange/access-point
+  detection fixes.
+
+## Repository Layout
 
 ```text
-addon.json
-web/index.html
-web/dune-addon-bridge.js
-web/market-seed-plan.json
-scripts/validate.js
-scripts/package.sh
-install-eda-exchange-bot.sh
-patch-redblink-local-addons.sh
+addon.json                 Addon identity, version, entry path, and permissions.
+CHANGELOG.md               Release history and reasoning behind changes.
+web/index.html             Addon HTML entry point.
+web/addon.js               Addon behavior (preview, seed, buyback, scheduler).
+web/addon.css              Addon styling.
+web/dune-addon-bridge.js   Helper for calling console APIs.
+web/market-seed-plan.json  Bundled Easy Dune Admin market seed plan.
+scripts/validate.js        Manifest validation.
+scripts/package.sh         Local packaging.
+.github/workflows/         GitHub validation and release packaging.
 ```
 
-The addon package itself is only `addon.json` plus `web/`. The install helper
-is for private VM testing and mirrors RedBlink's local development flow. Its
-default mode is community-review safe: installed disabled, with no permissions
-pre-approved.
+The addon package itself is only `addon.json` plus `web/`.
 
-`patch-redblink-local-addons.sh` is a temporary compatibility helper for
-RedBlink stack builds where the backend lists privately installed addons but
-the Addons table only renders community-index rows. It patches the Addons UI to
-also show installed-only addons, matching the behavior promised by RedBlink's
-local development documentation. It also normalizes multi-statement PostgreSQL
-results so write addons that use RedBlink's `database.execute` bridge can show
-the final result rows cleanly after a backup-protected write.
+## Permissions
+
+The manifest requests `database:read` and `database:write`. `database:read`
+populates the exchange selector and runs the auto-buyback eligibility probe.
+RedBlink's Console API creates a database backup before any write SQL runs
+through the addon bridge. No permissions are pre-approved by installing;
+server owners approve them from RedBlink Console.
+
+If the target server uses tightened PostgreSQL credentials, configure
+RedBlink's Console container with its existing DB environment variables
+(`ADMIN_DATABASE_URL` or `DUNE_DB_HOST`, `DUNE_DB_PORT`, `DUNE_DB_NAME`,
+`DUNE_DB_USER`, `DUNE_DB_PASSWORD`). The addon iframe never receives DB
+credentials.
 
 ## Validate
 
@@ -37,67 +76,50 @@ the final result rows cleanly after a backup-protected write.
 node scripts/validate.js
 ```
 
-## Install On A RedBlink VM
+## Local Development
 
-Upload this `eda-exchange-bot` folder to the VM, then run:
-
-```bash
-cd /path/to/eda-exchange-bot
-chmod +x install-eda-exchange-bot.sh
-./install-eda-exchange-bot.sh /home/steihl/dune-awakening-selfhost-docker
-```
-
-The helper copies `addon.json` and `web/` into:
-
-```text
-/home/steihl/dune-awakening-selfhost-docker/runtime/addons/installed/eda-exchange-bot
-```
-
-It also creates a disabled state entry in:
-
-```text
-/home/steihl/dune-awakening-selfhost-docker/runtime/addons/state.json
-```
-
-No permissions are pre-approved in the default helper flow. The addon manifest
-requests `database:read` and `database:write`; server owners should enable the
-addon and approve those permissions from RedBlink Console only when they want
-the market seeder active. `database:read` is used to populate the exchange
-selector; RedBlink's Console API creates a database backup before write SQL
-runs through the addon bridge.
-
-For private development only, you can intentionally install enabled with both
-database permissions already approved:
+Copy the addon into a local Dune Docker Console install:
 
 ```bash
-./install-eda-exchange-bot.sh /home/steihl/dune-awakening-selfhost-docker --dev-enable
+CONSOLE_DIR="$HOME/dune-awakening-selfhost-docker"
+ADDON_ID="eda-exchange-bot"
+
+mkdir -p "$CONSOLE_DIR/runtime/addons/installed/$ADDON_ID"
+cp -a addon.json web "$CONSOLE_DIR/runtime/addons/installed/$ADDON_ID/"
 ```
 
-If the target server has tightened PostgreSQL credentials, configure RedBlink's
-Console container with its existing DB environment variables instead of putting
-secrets in the addon:
-
-```text
-ADMIN_DATABASE_URL
-DUNE_DB_HOST
-DUNE_DB_PORT
-DUNE_DB_NAME
-DUNE_DB_USER
-DUNE_DB_PASSWORD
-```
-
-The addon iframe never receives DB credentials.
-
-If the addon exists in `runtime/addons/installed` and `state.json` but does not
-appear in the Addons table, apply the local-addons UI compatibility patch:
+Then enable it and approve the permissions you are testing:
 
 ```bash
-cd /path/to/eda-exchange-bot
-chmod +x patch-redblink-local-addons.sh
-./patch-redblink-local-addons.sh /home/steihl/dune-awakening-selfhost-docker
-cd /home/steihl/dune-awakening-selfhost-docker
-runtime/scripts/dune console restart
+cd "$CONSOLE_DIR"
+
+python3 - <<'PY'
+import json
+from pathlib import Path
+
+addon_id = "eda-exchange-bot"
+permissions = ["database:read", "database:write"]
+
+state_path = Path("runtime/addons/state.json")
+state_path.parent.mkdir(parents=True, exist_ok=True)
+
+try:
+    state = json.loads(state_path.read_text())
+except Exception:
+    state = {}
+
+state[addon_id] = {
+    "enabled": True,
+    "approvedPermissions": permissions
+}
+
+state_path.write_text(json.dumps(state, indent=2) + "\n")
+PY
 ```
+
+Refresh Dune Docker Console and open **Addons**. For community-review-safe
+installs, set `"enabled": False` and an empty permission list instead, and
+enable from the console UI.
 
 ## Package
 
@@ -114,5 +136,23 @@ dist/eda-exchange-bot-<version>.zip
 dist/eda-exchange-bot-<version>.zip.sha256
 ```
 
-Publishing to RedBlink's community addon index can come later after the addon
-is tested and reviewed.
+## Release
+
+1. Make sure `addon.json.version` is correct.
+2. Create and push a matching tag:
+
+   ```bash
+   git tag v0.9.0
+   git push origin v0.9.0
+   ```
+
+GitHub Actions validates the addon, packages it, creates the GitHub Release,
+and uploads the zip plus its SHA-256 checksum.
+
+## Submit To The Community Index
+
+When ready for public discovery in Dune Docker Console, open a pull request to
+[Red-Blink/dune-docker-addons](https://github.com/Red-Blink/dune-docker-addons)
+adding `addons/eda-exchange-bot.json` and updating `index.json`. Lifecycle
+status (`active`, `deprecated`, `unsupported`, `removed`, `blocked`) is managed
+by the community index, not this repository's `addon.json`.
