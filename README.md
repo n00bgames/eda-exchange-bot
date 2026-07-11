@@ -10,6 +10,10 @@ standalone Easy Dune Admin panel.
 Built from the
 [dune-docker-addon-template](https://github.com/Red-Blink/dune-docker-addon-template).
 
+See the [CHANGELOG](CHANGELOG.md) for what changed in each release, including
+the fixes ported from Easy Dune Admin's market bot and the reasoning behind
+them.
+
 ## Features
 
 - **Market seeding**: seeds NPC sell listings for equipment, schematics,
@@ -39,6 +43,7 @@ Built from the
 
 ```text
 addon.json                 Addon identity, version, entry path, and permissions.
+CHANGELOG.md               Release history and reasoning behind changes.
 web/index.html             Addon HTML entry point.
 web/addon.js               Addon behavior (preview, seed, buyback, scheduler).
 web/addon.css              Addon styling.
