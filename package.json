@@ -1,0 +1,13 @@
+{
+  "name": "eda-exchange-bot",
+  "version": "0.9.1",
+  "private": true,
+  "description": "Development and test harness for the EDA Exchange Bot addon. The shipped addon package is only addon.json plus web/.",
+  "scripts": {
+    "validate": "node scripts/validate.js",
+    "test": "node --test --test-concurrency=1 \"tests/*.test.js\""
+  },
+  "devDependencies": {
+    "jsdom": "^25.0.1"
+  }
+}
