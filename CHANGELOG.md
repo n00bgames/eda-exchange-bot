@@ -4,7 +4,7 @@ Notable changes to the EDA Exchange Bot addon. Written for RedBlink (console
 maintainer review) and n00bGames (addon author), documenting what changed and
 why.
 
-## 0.9.2 - 2026-07-19
+## 0.9.1 - 2026-07-19 small addition
 
 Fix for the buyback concurrency issue from RedBlink's 0.9.1 review.
 
