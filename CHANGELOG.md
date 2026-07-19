@@ -4,9 +4,26 @@ Notable changes to the EDA Exchange Bot addon. Written for RedBlink (console
 maintainer review) and n00bGames (addon author), documenting what changed and
 why.
 
-## 0.9.1 - 2026-07-19 small addition
+## 0.9.2 - 2026-07-19
 
-Fix for the buyback concurrency issue from RedBlink's 0.9.1 review.
+Fix for the buyback concurrency issue from RedBlink's 0.9.1 review, plus a
+corrected release. This entry was previously mislabeled as a second 0.9.1
+section: the concurrency fix was tagged `0.9.1` (without the `v` prefix), so
+the `v*` release workflow never rebuilt the archive and the published v0.9.1
+zip did not contain it. 0.9.2 is a clean, immutable release built from the
+corrected source.
+
+### Release
+
+- Republished as `v0.9.2` so the release workflow rebuilds the archive from
+  the corrected source; the published zip now contains the concurrency fix.
+- Version fields aligned: `addon.json`, `package.json`, and the release tag
+  all report 0.9.2 (they previously disagreed between 0.9.1 and 0.9.2).
+- Removed stale committed `dist/` archives (0.9.0 and 0.9.1) from the
+  repository; `dist/` is gitignored and release archives are built by the
+  `v*` tag workflow. The committed 0.9.1 zip's checksum no longer matched
+  the published release asset, which is what broke the catalog manifest's
+  SHA-256.
 
 ### Fixed
 
