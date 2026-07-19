@@ -85,8 +85,9 @@ test("buyback SQL: payment records are per-unit, never-expiring, seller-owned", 
   assert.match(sql, /INSERT INTO dune\.dune_exchange_fulfilled_orders \(order_id, source_order_id, completion_type, stack_size, original_order_id\)/);
   // Sweep only touches the selected exchange and player orders.
   assert.ok(sql.includes(`o.exchange_id = ${EXCHANGE_ID} AND o.is_npc_order = FALSE AND o.owner_id <> v_owner_id`));
-  // Max buys limit applies.
-  assert.match(sql, /LIMIT 500 LOOP/);
+  // Max buys limit applies, and selected orders are locked so concurrent
+  // sweeps (other tabs/admins) skip them instead of buying them twice.
+  assert.match(sql, /LIMIT 500 FOR UPDATE OF o, s SKIP LOCKED LOOP/);
 });
 
 test("buyback SQL: changing threshold and max buys is reflected", async () => {
@@ -95,6 +96,6 @@ test("buyback SQL: changing threshold and max buys is reflected", async () => {
   harness.setValue("maxBuys", 25);
   const sql = await harness.clickAndCaptureSql("buySweep");
   assert.ok(sql.includes("('TestOre',250)"), "TestOre: 500 * 50% = 250");
-  assert.match(sql, /LIMIT 25 LOOP/);
+  assert.match(sql, /LIMIT 25 FOR UPDATE OF o, s SKIP LOCKED LOOP/);
   assert.match(sql, /VALUES \(v_purchased, v_units, v_solari, 50, 25\)/);
 });

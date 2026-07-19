@@ -4,6 +4,40 @@ Notable changes to the EDA Exchange Bot addon. Written for RedBlink (console
 maintainer review) and n00bGames (addon author), documenting what changed and
 why.
 
+## 0.9.2 - 2026-07-19
+
+Fix for the buyback concurrency issue from RedBlink's 0.9.1 review.
+
+### Fixed
+
+- **Database-level buyback concurrency protection**: the buyback sweep's
+  order-selection loop now locks the rows it processes with
+  `FOR UPDATE OF o, s SKIP LOCKED`. The existing `writeInProgress` flag only
+  protects a single browser page; two tabs or administrators sweeping at the
+  same time could previously select the same player order twice, creating a
+  duplicate seller payment and debiting the bot's balance twice. With row
+  locking, a concurrent sweep skips orders another sweep has already claimed
+  (and rows deleted by a committed sweep drop out of the re-checked result),
+  so each order is purchased exactly once no matter how many sweeps run.
+- The sweep no longer calls `dune_exchange_get_user_id` (its result was
+  unused): the function's `INSERT .. ON CONFLICT` would block on another
+  sweep's uncommitted balance update, needlessly serializing sweeps that
+  `SKIP LOCKED` lets run side by side. The balance top-up still creates the
+  bot's exchange-users row when it is missing.
+
+### Tests
+
+- New PostgreSQL-backed concurrency test
+  (`tests/db-buyback-concurrency.test.js`) runs two sweeps on separate
+  database connections against the same eligible order, both as overlapping
+  transactions (the second runs while the first is still uncommitted) and as
+  a simultaneous race. It verifies the order is purchased exactly once, only
+  one payment record is created, and the bot's balance is deducted exactly
+  once; without the row locking the test fails with a double purchase.
+- `tests/helpers/db.js` gained `openSession()`: a long-lived interactive
+  psql session (one connection per session) so tests can hold a transaction
+  open while another runs concurrently.
+
 ## 0.9.1 - 2026-07-19
 
 Fixes for the two blocking issues from RedBlink's 0.9.0 review, plus the

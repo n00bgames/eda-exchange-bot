@@ -4,7 +4,7 @@
 // addon's generated SQL against a real server without extra npm dependencies.
 // Connection settings come from the standard PG* environment variables.
 
-const { spawnSync, execFileSync } = require("child_process");
+const { spawn, spawnSync, execFileSync } = require("child_process");
 
 function psqlAvailable() {
   const result = spawnSync("psql", ["--version"], { encoding: "utf8" });
@@ -94,8 +94,52 @@ function queryOne(dbName, sql) {
   return rows[0][0];
 }
 
+// Long-lived interactive psql session: each session is one database
+// connection, so tests can hold a transaction open in one session while
+// another session runs concurrently (needed for lock-contention tests).
+function openSession(dbName) {
+  const child = spawn("psql", ["-X", "-q", "-A", "-t", "-d", dbName], {
+    stdio: ["pipe", "pipe", "pipe"]
+  });
+  let stdoutBuffer = "";
+  let stderrBuffer = "";
+  child.stdout.on("data", (chunk) => { stdoutBuffer += chunk; });
+  child.stderr.on("data", (chunk) => { stderrBuffer += chunk; });
+  let sequence = 0;
+
+  // Runs a SQL script on this session's connection and resolves once psql has
+  // processed all of it (detected via an \echo sentinel). Errors do not close
+  // the session; they are returned in stderr for the test to inspect.
+  async function run(sql, { timeoutMs = 30000 } = {}) {
+    sequence += 1;
+    const sentinel = `__PSQL_SESSION_DONE_${sequence}__`;
+    const stdoutStart = stdoutBuffer.length;
+    const stderrStart = stderrBuffer.length;
+    child.stdin.write(`${sql}\n\\echo ${sentinel}\n`);
+    const start = Date.now();
+    while (!stdoutBuffer.slice(stdoutStart).includes(sentinel)) {
+      if (child.exitCode !== null) {
+        throw new Error(`psql session exited (${child.exitCode}):\n${stderrBuffer}`);
+      }
+      if (Date.now() - start > timeoutMs) {
+        throw new Error(`psql session timed out after ${timeoutMs}ms waiting for:\n${sql}`);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    const stdout = stdoutBuffer.slice(stdoutStart, stdoutBuffer.indexOf(sentinel, stdoutStart));
+    return { stdout, stderr: stderrBuffer.slice(stderrStart) };
+  }
+
+  function close() {
+    try { child.stdin.end("\\q\n"); } catch { /* already closed */ }
+    setTimeout(() => { if (child.exitCode === null) child.kill(); }, 1000).unref();
+  }
+
+  return { run, close };
+}
+
 function loadFixture(dbName, fixturePath) {
   execFileSync("psql", ["-X", "-q", "-v", "ON_ERROR_STOP=1", "-d", dbName, "-f", fixturePath], { encoding: "utf8" });
 }
 
-module.exports = { psqlAvailable, createTestDb, dropTestDb, execSql, queryRows, queryObjects, queryOne, loadFixture };
+module.exports = { psqlAvailable, createTestDb, dropTestDb, execSql, queryRows, queryObjects, queryOne, openSession, loadFixture };
