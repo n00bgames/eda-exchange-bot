@@ -1,6 +1,6 @@
 {
   "name": "eda-exchange-bot",
-  "version": "0.9.2",
+  "version": "0.10.0",
   "private": true,
   "description": "Development and test harness for the EDA Exchange Bot addon. The shipped addon package is only addon.json plus web/.",
   "scripts": {

@@ -19,6 +19,13 @@
   const materialListingsEl = document.getElementById("materialListings");
   const autoBuybackEl = document.getElementById("autoBuyback");
   const autoBuybackIntervalEl = document.getElementById("autoBuybackInterval");
+  const serverScheduleSectionEl = document.getElementById("serverScheduleSection");
+  const serverScheduleEnabledEl = document.getElementById("serverScheduleEnabled");
+  const serverIntervalMinutesEl = document.getElementById("serverIntervalMinutes");
+  const serverPriceMultiplierEl = document.getElementById("serverPriceMultiplier");
+  const serverBuybackPercentEl = document.getElementById("serverBuybackPercent");
+  const serverMaxBuysEl = document.getElementById("serverMaxBuys");
+  const serverScheduleStatusEl = document.getElementById("serverScheduleStatus");
 
   let payload = null;
   let renderedRows = [];
@@ -26,6 +33,10 @@
   let writeInProgress = false;
   let nextAutoRunAt = 0;
   let autoRunning = false;
+  let serverScheduleSupported = false;
+  let serverScheduleRefreshInFlight = false;
+  let serverScheduleSaveInFlight = false;
+  let serverProbeInFlight = false;
 
   const rememberedExchangeStorageKey = "eda-exchange-bot.remembered-exchanges";
   const settingsStorageKey = "eda-exchange-bot.settings";
@@ -765,6 +776,199 @@ COMMIT;`;
     }
   }
 
+  // ---- Server-side buyback schedule ----
+  //
+  // Scheduler-capable consoles (Red-Blink/dune-awakening-selfhost-docker
+  // PR #103) run the buyback loop inside the console API process, so sweeps
+  // keep running after this page closes. The console builds all SQL for the
+  // scheduler.* actions server-side from the bundled seed plan; this page only
+  // sends typed parameters, never SQL. Older consoles answer these actions
+  // with "Unsupported addon action", in which case the section stays hidden
+  // and the in-page auto buyback remains the only automation.
+
+  function setServerScheduleStatus(message, className = "status") {
+    serverScheduleStatusEl.className = className;
+    serverScheduleStatusEl.textContent = message;
+  }
+
+  function formatScheduleTime(value) {
+    if (!value) return "";
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString();
+  }
+
+  function serverScheduleFormValues() {
+    const schedule = {
+      enabled: serverScheduleEnabledEl.checked,
+      intervalMinutes: clampInteger(serverIntervalMinutesEl.value, 30, 10, 1440),
+      priceMultiplier: clampInteger(serverPriceMultiplierEl.value, 5, 1, 100),
+      buybackPercent: clampInteger(serverBuybackPercentEl.value, 60, 1, 100),
+      maxBuys: clampInteger(serverMaxBuysEl.value, 500, 1, 5000)
+    };
+    // exchangeId must travel as a string: BIGINT ids above
+    // Number.MAX_SAFE_INTEGER lose precision through Number(). Omitting it
+    // keeps the saved value (the console supports partial updates).
+    const exchangeId = normalizeExchangeId(exchangeIdEl.value);
+    if (exchangeId) schedule.exchangeId = exchangeId;
+    return schedule;
+  }
+
+  function renderServerSchedule(schedule, { populateForm = false } = {}) {
+    if (!schedule || typeof schedule !== "object") return;
+    if (populateForm) {
+      serverScheduleEnabledEl.checked = Boolean(schedule.enabled);
+      if (schedule.intervalMinutes != null) serverIntervalMinutesEl.value = String(schedule.intervalMinutes);
+      if (schedule.priceMultiplier != null) serverPriceMultiplierEl.value = String(schedule.priceMultiplier);
+      if (schedule.buybackPercent != null) serverBuybackPercentEl.value = String(schedule.buybackPercent);
+      if (schedule.maxBuys != null) serverMaxBuysEl.value = String(schedule.maxBuys);
+    }
+    const parts = [];
+    if (schedule.enabled) {
+      parts.push(`enabled, every ${formatNumber(schedule.intervalMinutes)} min on exchange ${schedule.exchangeId || "(none saved)"}`);
+      if (schedule.nextRunAt) parts.push(`next run ${formatScheduleTime(schedule.nextRunAt)}`);
+    } else {
+      parts.push(schedule.exchangeId ? `disabled (saved exchange ${schedule.exchangeId})` : "disabled");
+    }
+    if (schedule.lastRunAt) {
+      const runStatus = schedule.lastRunStatus ? ` (${schedule.lastRunStatus})` : "";
+      const runDetail = schedule.lastRunDetail ? `: ${schedule.lastRunDetail}` : "";
+      parts.push(`last run ${formatScheduleTime(schedule.lastRunAt)}${runStatus}${runDetail}`);
+    } else {
+      parts.push("no runs yet");
+    }
+    setServerScheduleStatus(`Server-side schedule: ${parts.join(" | ")}.`, schedule.lastRunStatus === "error" ? "status error" : "status");
+
+    // Steer away from double automation: with the server schedule enabled the
+    // in-page loop would run redundant sweeps, each taking its own backup.
+    if (schedule.enabled) {
+      if (autoBuybackEl.checked) {
+        autoBuybackEl.checked = false;
+        persistSettings();
+        onAutoBuybackToggle();
+      }
+      autoBuybackEl.disabled = true;
+      setAutoStatus("In-page auto buyback is off: the server-side schedule runs sweeps unattended, even with this page closed.");
+    } else {
+      autoBuybackEl.disabled = false;
+    }
+  }
+
+  async function loadServerSchedule({ populateForm = false, quiet = false } = {}) {
+    if (serverScheduleRefreshInFlight) return;
+    serverScheduleRefreshInFlight = true;
+    try {
+      const schedule = await requestBridge("scheduler.schedule.get");
+      renderServerSchedule(schedule, { populateForm });
+    } catch (error) {
+      if (!quiet) setServerScheduleStatus(`Server-side schedule status failed to load: ${error.message || String(error)}`, "status error");
+    } finally {
+      serverScheduleRefreshInFlight = false;
+    }
+  }
+
+  async function detectServerSchedule() {
+    // Outside the console there is no bridge, so there is nothing to detect.
+    if (window.parent === window) return;
+    try {
+      const schedule = await requestBridge("scheduler.schedule.get");
+      serverScheduleSupported = true;
+      serverScheduleSectionEl.hidden = false;
+      renderServerSchedule(schedule, { populateForm: true });
+    } catch (error) {
+      const message = String(error?.message || error);
+      // Older consoles reject the action outright; keep the section hidden and
+      // leave the in-page auto buyback as the only automation.
+      if (/unsupported addon action/i.test(message)) return;
+      serverScheduleSupported = true;
+      serverScheduleSectionEl.hidden = false;
+      setServerScheduleStatus(`Server-side schedule status failed to load: ${message} Use Refresh Status to retry.`, "status error");
+    }
+  }
+
+  async function saveServerSchedule() {
+    if (serverScheduleSaveInFlight) return;
+    serverScheduleSaveInFlight = true;
+    const saveButton = document.getElementById("saveServerSchedule");
+    saveButton.disabled = true;
+    try {
+      const schedule = serverScheduleFormValues();
+      setServerScheduleStatus("Saving server-side schedule...");
+      const saved = await requestBridge("scheduler.schedule.set", { schedule });
+      renderServerSchedule(saved, { populateForm: true });
+    } catch (error) {
+      const message = error.message || String(error);
+      const enabling = serverScheduleEnabledEl.checked;
+      // Enabling needs the scheduler:server permission approved; point the
+      // admin at the fix instead of leaving a bare permission error.
+      const hint = enabling && /scheduler:server|permission|approved/i.test(message)
+        ? " Approve the scheduler:server permission for this addon in the console's Addons panel, then save again."
+        : "";
+      setServerScheduleStatus(`Saving the server-side schedule failed: ${message}${hint}`, "status error");
+    } finally {
+      serverScheduleSaveInFlight = false;
+      saveButton.disabled = false;
+    }
+  }
+
+  async function probeServerSchedule() {
+    if (serverProbeInFlight) return;
+    serverProbeInFlight = true;
+    const probeButton = document.getElementById("serverProbe");
+    probeButton.disabled = true;
+    try {
+      // The probe accepts only these override fields; extras are rejected.
+      const { exchangeId, priceMultiplier, buybackPercent, maxBuys } = serverScheduleFormValues();
+      const overrides = { priceMultiplier, buybackPercent, maxBuys };
+      if (exchangeId) overrides.exchangeId = exchangeId;
+      setServerScheduleStatus("Probing eligibility (read-only; no backup is taken)...");
+      const result = await requestBridge("scheduler.probe", overrides);
+      const eligible = Number(result?.eligible || 0);
+      setServerScheduleStatus(`Probe: ${eligible.toLocaleString()} eligible player listings on exchange ${result?.exchangeId || overrides.exchangeId || "?"} at ${result?.buybackPercent ?? overrides.buybackPercent}% threshold (read-only; no backup taken).`, "status ok");
+    } catch (error) {
+      setServerScheduleStatus(`Probe failed: ${error.message || String(error)}`, "status error");
+    } finally {
+      serverProbeInFlight = false;
+      probeButton.disabled = false;
+    }
+  }
+
+  async function runServerSweep() {
+    if (writeInProgress) {
+      setServerScheduleStatus("Another write is already in progress.", "status error");
+      return;
+    }
+    writeInProgress = true;
+    for (const button of document.querySelectorAll("button")) button.disabled = true;
+    setServerScheduleStatus("Server-side sweep starting with the saved schedule: the console probes eligibility first and takes a backup only when there is something to buy...");
+    resultEl.textContent = "Running...";
+    try {
+      const result = await requestBridge("scheduler.run", {});
+      resultEl.textContent = JSON.stringify(result, null, 2);
+      // Render the returned schedule first so the sweep outcome message below
+      // is what stays visible in the status area.
+      if (result?.schedule) renderServerSchedule(result.schedule);
+      if (result?.status === "swept") {
+        setServerScheduleStatus(`Server-side sweep finished: bought ${formatNumber(result.purchased)} listings (${formatNumber(result.totalUnits)} units, ${formatNumber(result.totalSolari)} Solari).${result.detail ? ` ${result.detail}` : ""}`, "status ok");
+      } else {
+        setServerScheduleStatus(`Server-side sweep: nothing eligible; no backup was taken.${result?.detail ? ` ${result.detail}` : ""}`, "status ok");
+      }
+    } catch (error) {
+      resultEl.textContent = error.stack || error.message || String(error);
+      setServerScheduleStatus(`Server-side sweep failed: ${error.message || String(error)}`, "status error");
+    } finally {
+      writeInProgress = false;
+      for (const button of document.querySelectorAll("button")) button.disabled = false;
+    }
+  }
+
+  // Light status poll while the section is visible. The bridge rate limit
+  // (~60 requests/min per addon+IP) is shared with every other call from this
+  // page, so poll sparingly.
+  function serverSchedulePollTick() {
+    if (!serverScheduleSupported || writeInProgress) return;
+    void loadServerSchedule({ quiet: true });
+  }
+
   async function loadSeedPlan() {
     statusEl.className = "status";
     statusEl.textContent = "Loading bundled Easy Dune Admin market seed plan...";
@@ -805,6 +1009,12 @@ COMMIT;`;
     confirmDetail: "This removes the EDA bot's listings from ALL exchanges, not just the selected one."
   }));
   document.getElementById("dropUnsafe").addEventListener("click", () => void runWrite("Drop unsafe NPC listings", buildDropUnsafeSql));
+  document.getElementById("saveServerSchedule").addEventListener("click", () => void saveServerSchedule());
+  document.getElementById("serverProbe").addEventListener("click", () => void probeServerSchedule());
+  document.getElementById("serverRun").addEventListener("click", () => void runServerSweep());
+  document.getElementById("refreshServerSchedule").addEventListener("click", () => void loadServerSchedule({ populateForm: true }));
   window.setInterval(autoBuybackTick, 15000);
+  window.setInterval(serverSchedulePollTick, 45000);
+  void detectServerSchedule();
   loadSeedPlan();
 })();

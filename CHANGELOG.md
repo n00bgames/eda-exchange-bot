@@ -4,6 +4,67 @@ Notable changes to the EDA Exchange Bot addon. Written for RedBlink (console
 maintainer review) and n00bGames (addon author), documenting what changed and
 why.
 
+## 0.10.0 - 2026-07-24
+
+Unattended buyback through the console's new server-side addon scheduler
+([Red-Blink/dune-awakening-selfhost-docker#103](https://github.com/Red-Blink/dune-awakening-selfhost-docker/pull/103)).
+The console API process now runs the buyback loop itself, so the sweep no
+longer requires this addon's page to stay open in a browser.
+
+### Added
+
+- **Server-Side Buyback Schedule panel**: saves the schedule (enabled,
+  interval 10-1440 minutes, exchange, price multiplier, buyback percent, max
+  buys) to the console through the typed `scheduler.schedule.get` /
+  `scheduler.schedule.set` bridge actions, shows live status (next run, last
+  run outcome and detail), and offers **Probe Now** (`scheduler.probe`,
+  read-only, no backup) and **Run Sweep Now** (`scheduler.run`, uses the
+  saved schedule; probes first and takes a backup only when eligible
+  listings exist). The panel polls status every 45 seconds while visible,
+  well inside the shared ~60 requests/min bridge rate limit.
+- The exchange for the schedule is the one selected in Exchange Controls at
+  save time, always sent as a decimal string so 64-bit exchange ids survive
+  (same rule as the rest of the addon).
+- **Feature detection**: on load the addon calls `scheduler.schedule.get`;
+  consoles without scheduler support answer "Unsupported addon action" and
+  the section stays hidden, leaving the in-page auto buyback exactly as
+  before. Validation and permission errors from the console surface in the
+  panel's status area, including an actionable hint when enabling fails
+  because `scheduler:server` was not approved.
+- **Double-automation steering**: while the server-side schedule is enabled,
+  the in-page auto buyback checkbox is unchecked and disabled. Concurrent
+  sweeps are safe at the database level (`FOR UPDATE OF o, s SKIP LOCKED`)
+  but redundant, and each takes its own backup.
+- **Run Sweep Now** shares the `writeInProgress` guard with the SQL write
+  buttons: a server-side run refuses to start during a manual write and vice
+  versa, and all buttons lock while it is in flight.
+
+### Changed
+
+- `addon.json` now requests the `scheduler:server` permission (object form:
+  `"scheduler": ["server"]`) alongside database read/write, and the version
+  is 0.10.0.
+- **Compatibility**: older console builds reject manifests that request
+  unknown permissions, so 0.10.x only installs on console builds with
+  scheduler support. Keep 0.9.x for older consoles; its in-page auto buyback
+  is unchanged and remains in 0.10.x as the fallback (the SQL builders and
+  the 15-second tick loop are untouched).
+- `scripts/validate.js` allows the new `scheduler:server` permission.
+
+### Tests
+
+- New `tests/server-schedule.test.js` covers: feature-detection fallback on
+  older consoles, schedule form to `scheduler.schedule.set` payload mapping
+  (including string `exchangeId` and omitting it for partial updates),
+  the `scheduler:server` permission-error hint, probe payload/result wiring,
+  run-sweep button locking against manual writes (both directions), the
+  in-page auto buyback steering, and quiet status polling that does not stomp
+  form edits.
+- `tests/helpers/harness.js` routes `scheduler.*` bridge actions to a mock
+  handler that defaults to the pre-scheduler console reply ("Unsupported
+  addon action"), so every existing test now also exercises the fallback
+  path.
+
 ## 0.9.2 - 2026-07-19
 
 Fix for the buyback concurrency issue from RedBlink's 0.9.1 review, plus a

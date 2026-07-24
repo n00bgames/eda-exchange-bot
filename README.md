@@ -29,11 +29,26 @@ them.
   grade multipliers. Seller payment entries use EDA's fixes: per-unit
   `item_price` and the never-expires sentinel expiration (`999999999`) so the
   game server's expire proc cannot purge an uncollected "Take Solari" payment.
-- **Auto buyback**: optional scheduler that runs the buyback sweep on an
-  interval (default 30 minutes, minimum 10) while the addon page is open.
-  Every run starts with a read-only eligibility query; the write sweep (and
-  RedBlink's automatic pre-write backup) only happens when there is at least
-  one eligible listing, so idle ticks are cheap on self-hosted servers.
+- **Unattended buyback (server-side schedule)**: on consoles with addon
+  scheduler support
+  ([Red-Blink/dune-awakening-selfhost-docker#103](https://github.com/Red-Blink/dune-awakening-selfhost-docker/pull/103)),
+  the console API process runs the buyback loop itself, so sweeps keep running
+  with the addon page closed. The addon saves the schedule (interval,
+  exchange, price multiplier, buyback percent, max buys) through typed bridge
+  actions; the console builds all SQL server-side from the bundled seed plan
+  and never accepts SQL for scheduled runs. Every run probes eligibility with
+  a read-only query first and takes a pre-write backup only when there is
+  something to buy. Requires the `scheduler:server` permission to be approved.
+  The addon feature-detects console support and hides the section on older
+  consoles.
+- **Auto buyback (in-page)**: optional scheduler that runs the buyback sweep
+  on an interval (default 30 minutes, minimum 10) while the addon page is
+  open. Every run starts with a read-only eligibility query; the write sweep
+  (and RedBlink's automatic pre-write backup) only happens when there is at
+  least one eligible listing, so idle ticks are cheap on self-hosted servers.
+  Kept as the fallback automation for consoles without scheduler support;
+  while the server-side schedule is enabled, the in-page toggle is turned off
+  to avoid redundant sweeps (and their backups).
 - **Exchange detection**: resolves access points from
   `dune_exchange_accesspoints` first (the exchange players actually reach
   in-game) and refuses to fabricate one, matching EDA's exchange/access-point
@@ -60,11 +75,19 @@ The addon package itself is only `addon.json` plus `web/`.
 
 ## Permissions
 
-The manifest requests `database:read` and `database:write`. `database:read`
-populates the exchange selector and runs the auto-buyback eligibility probe.
-RedBlink's Console API creates a database backup before any write SQL runs
-through the addon bridge. No permissions are pre-approved by installing;
-server owners approve them from RedBlink Console.
+The manifest requests `database:read`, `database:write`, and
+`scheduler:server`. `database:read` populates the exchange selector and runs
+the auto-buyback eligibility probe. `scheduler:server` lets the console run
+the buyback schedule unattended (server-side sweeps still take the same
+pre-write backups). RedBlink's Console API creates a database backup before
+any write SQL runs through the addon bridge. No permissions are pre-approved
+by installing; server owners approve them from RedBlink Console.
+
+**Compatibility**: console builds without addon scheduler support
+([Red-Blink/dune-awakening-selfhost-docker#103](https://github.com/Red-Blink/dune-awakening-selfhost-docker/pull/103))
+reject manifests that request unknown permissions, so addon 0.10.x only
+installs on scheduler-capable consoles. Use addon 0.9.x on older consoles;
+its in-page auto buyback still works there.
 
 If the target server uses tightened PostgreSQL credentials, configure
 RedBlink's Console container with its existing DB environment variables
@@ -85,7 +108,9 @@ bridge, and execute the SQL the addon generates against a real PostgreSQL
 server using a minimal replica of the exchange schema
 (`tests/fixtures/dune-schema.sql`). They cover 64-bit exchange-id
 preservation, exchange-scoped seeding cleanup, global cleanup, buyback SQL
-generation and payment records, and manual/automatic buyback concurrency.
+generation and payment records, manual/automatic buyback concurrency, and the
+server-side schedule wiring (feature detection, form-to-payload mapping,
+permission-error surfacing, and probe/run actions).
 
 ```bash
 npm install
@@ -119,7 +144,7 @@ import json
 from pathlib import Path
 
 addon_id = "eda-exchange-bot"
-permissions = ["database:read", "database:write"]
+permissions = ["database:read", "database:write", "scheduler:server"]
 
 state_path = Path("runtime/addons/state.json")
 state_path.parent.mkdir(parents=True, exist_ok=True)

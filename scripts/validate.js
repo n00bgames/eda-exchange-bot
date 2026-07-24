@@ -9,6 +9,7 @@ const allowedPermissions = new Set([
   "players:read",
   "database:read",
   "database:write",
+  "scheduler:server",
   "server:status",
   "server:restart",
   "files:addon-data",

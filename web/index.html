@@ -11,7 +11,7 @@
     <section>
       <h1>EDA Exchange Bot</h1>
       <p>Native RedBlink Console controls generated from Easy Dune Admin's exchange seeder. RedBlink creates a database backup before write SQL runs through the addon bridge.</p>
-      <p><span class="badge">Permission: database read/write</span> <span class="badge">DB credentials stay in RedBlink Console</span></p>
+      <p><span class="badge">Permission: database read/write</span> <span class="badge">Permission: scheduler server (unattended buyback)</span> <span class="badge">DB credentials stay in RedBlink Console</span></p>
     </section>
 
     <section>
@@ -60,6 +60,34 @@
       <p class="muted">If your server uses tightened PostgreSQL credentials, configure RedBlink Console with <code>ADMIN_DATABASE_URL</code> or <code>DUNE_DB_HOST</code>, <code>DUNE_DB_PORT</code>, <code>DUNE_DB_NAME</code>, <code>DUNE_DB_USER</code>, and <code>DUNE_DB_PASSWORD</code>. The addon never receives DB credentials.</p>
       <div id="status" class="status">Ready.</div>
       <div id="autoStatus" class="status">Auto buyback is off.</div>
+    </section>
+
+    <section id="serverScheduleSection" hidden>
+      <h2>Server-Side Buyback Schedule</h2>
+      <p>The console runs the buyback sweep unattended, so this page does not need to stay open. Scheduled and manual server-side runs use the <strong>saved</strong> values below with the exchange selected in Exchange Controls at save time; save the schedule before using Run Sweep Now. Every run probes eligibility with a read-only query first and takes a backup only when there is something to buy. All SQL is built by the console from the bundled seed plan.</p>
+      <div class="controls">
+        <label>Interval (minutes)
+          <input id="serverIntervalMinutes" type="number" min="10" max="1440" step="1" value="30">
+        </label>
+        <label>Price Multiplier
+          <input id="serverPriceMultiplier" type="number" min="1" max="100" step="1" value="5">
+        </label>
+        <label>Buyback Percentage
+          <input id="serverBuybackPercent" type="number" min="1" max="100" step="1" value="60">
+        </label>
+        <label>Max Buys Per Sweep
+          <input id="serverMaxBuys" type="number" min="1" max="5000" step="1" value="500">
+        </label>
+        <label class="checkbox-line"><input id="serverScheduleEnabled" type="checkbox"> Run buyback on the console server (unattended)</label>
+      </div>
+      <div class="button-row">
+        <button id="saveServerSchedule" type="button">Save Schedule</button>
+        <button id="serverProbe" type="button" class="secondary">Probe Now</button>
+        <button id="serverRun" type="button" class="danger">Run Sweep Now</button>
+        <button id="refreshServerSchedule" type="button" class="secondary">Refresh Status</button>
+      </div>
+      <p class="muted">Enabling requires the <code>scheduler:server</code> permission to be approved in the console's Addons panel. The first run fires one full interval after enabling; the schedule survives console restarts. While the server-side schedule is enabled, the in-page auto buyback checkbox is turned off: concurrent sweeps are safe at the database level but redundant, and each takes its own backup.</p>
+      <div id="serverScheduleStatus" class="status">Checking console support...</div>
     </section>
 
     <section>

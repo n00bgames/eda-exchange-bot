@@ -98,6 +98,9 @@ const harnessProto = {
   executedSql() {
     return this.bridgeCalls.filter((call) => call.action === "database.execute").map((call) => call.query);
   },
+  schedulerCalls(action = null) {
+    return this.bridgeCalls.filter((call) => (action ? call.action === action : String(call.action).startsWith("scheduler.")));
+  },
   async clickAndCaptureSql(buttonId) {
     const before = this.executedSql().length;
     this.el(buttonId).click();
@@ -137,7 +140,10 @@ async function createHarness(options = {}) {
     intervalCallbacks: [],
     // Handlers may be replaced per-test. They may return promises.
     onQuery: options.onQuery || (async () => ({ rows: [exchangeRow()] })),
-    onExecute: options.onExecute || (async () => ({ rows: [] }))
+    onExecute: options.onExecute || (async () => ({ rows: [] })),
+    // scheduler.* actions default to what a pre-scheduler console answers, so
+    // existing tests exercise the feature-detection fallback path.
+    onScheduler: options.onScheduler || (async (action) => { throw new Error(`Unsupported addon action: ${action}`); })
   });
 
   window.DuneAddon = {
@@ -146,6 +152,7 @@ async function createHarness(options = {}) {
       try {
         if (action === "database.query") return Promise.resolve(harness.onQuery(payload));
         if (action === "database.execute") return Promise.resolve(harness.onExecute(payload));
+        if (String(action).startsWith("scheduler.")) return Promise.resolve(harness.onScheduler(action, payload));
       } catch (error) {
         return Promise.reject(error);
       }
